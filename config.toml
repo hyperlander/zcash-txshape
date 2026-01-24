@@ -1,0 +1,14 @@
+# Zcash node RPC (read-only). Use a local zcashd or a trusted endpoint.
+# Default: local zcashd. For mainnet, run: zcashd -daemon and ensure rpcallowip=127.0.0.1, rpcuser/rpcpassword if desired.
+[node]
+rpc_url = "http://127.0.0.1:8232"
+# rpc_user = "user"
+# rpc_password = "pass"
+timeout_secs = 30
+
+[storage]
+db_path = "txshape.db"
+
+[collector]
+batch_size = 10
+batch_delay_ms = 500
