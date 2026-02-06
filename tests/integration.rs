@@ -62,7 +62,7 @@ fn report_daily_empty_db() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
     let conn = storage::open_db(&db_path).unwrap();
-    let result = report::daily_summary(&conn, 7);
+    let result = report::daily_summary(&conn, 7, false);
     result.unwrap();
 }
 
@@ -74,6 +74,6 @@ fn report_range_diff() {
     let stats = sample_stats();
     storage::upsert_block_stats(&conn, 0, &stats).unwrap();
     storage::upsert_block_stats(&conn, 1, &stats).unwrap();
-    let result = report::range_diff(&conn, 0, 1, 1, 2);
+    let result = report::range_diff(&conn, 0, 1, 1, 2, false);
     result.unwrap();
 }

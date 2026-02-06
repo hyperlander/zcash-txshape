@@ -3,35 +3,105 @@
 use crate::model::ShapeStats;
 use crate::storage;
 use rusqlite::Connection;
+use serde::Serialize;
 
-pub fn daily_summary(conn: &Connection, days: u32) -> anyhow::Result<()> {
+#[derive(Serialize)]
+struct SummaryReport {
+    title: String,
+    height_start: u32,
+    height_end: u32,
+    n_txs: u64,
+    with_transparent: u64,
+    with_shielded: u64,
+    size_entropy: f64,
+    version_hist: std::collections::HashMap<u32, u64>,
+}
+
+#[derive(Serialize)]
+struct DiffReport {
+    range_a: RangeStats,
+    range_b: RangeStats,
+    n_txs_delta: i64,
+    size_entropy_delta: f64,
+}
+
+#[derive(Serialize)]
+struct RangeStats {
+    low: u32,
+    high: u32,
+    n_txs: u64,
+    size_entropy: f64,
+}
+
+pub fn daily_summary(conn: &Connection, days: u32, json: bool) -> anyhow::Result<()> {
     let heights = storage::block_heights_in_range(conn, 0, u32::MAX)?;
     let max_h = heights.last().copied().unwrap_or(0);
     if max_h == 0 {
-        println!("No block data in database.");
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"error": "no block data in database"})
+            );
+        } else {
+            println!("No block data in database.");
+        }
         return Ok(());
     }
     let blocks_per_day = 24 * 6;
     let start = max_h.saturating_sub(days * blocks_per_day);
     let stats = storage::aggregate_block_stats_in_range(conn, start, max_h)?;
-    print_stats_summary(
-        &format!("Last {} days (heights {}-{})", days, start, max_h),
-        &stats,
-    );
+    let title = format!("Last {} days (heights {}-{})", days, start, max_h);
+    if json {
+        let report = SummaryReport {
+            title: title.clone(),
+            height_start: start,
+            height_end: max_h,
+            n_txs: stats.n_txs,
+            with_transparent: stats.with_transparent,
+            with_shielded: stats.with_shielded,
+            size_entropy: stats.size_entropy,
+            version_hist: stats.version_hist.clone(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_stats_summary(&title, &stats);
+    }
     Ok(())
 }
 
-pub fn weekly_summary(conn: &Connection) -> anyhow::Result<()> {
+pub fn weekly_summary(conn: &Connection, json: bool) -> anyhow::Result<()> {
     let heights = storage::block_heights_in_range(conn, 0, u32::MAX)?;
     let max_h = heights.last().copied().unwrap_or(0);
     if max_h == 0 {
-        println!("No block data in database.");
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"error": "no block data in database"})
+            );
+        } else {
+            println!("No block data in database.");
+        }
         return Ok(());
     }
     const BLOCKS_PER_WEEK: u32 = 7 * 24 * 6;
     let start = max_h.saturating_sub(BLOCKS_PER_WEEK);
     let stats = storage::aggregate_block_stats_in_range(conn, start, max_h)?;
-    print_stats_summary(&format!("Last week (heights {}-{})", start, max_h), &stats);
+    let title = format!("Last week (heights {}-{})", start, max_h);
+    if json {
+        let report = SummaryReport {
+            title: title.clone(),
+            height_start: start,
+            height_end: max_h,
+            n_txs: stats.n_txs,
+            with_transparent: stats.with_transparent,
+            with_shielded: stats.with_shielded,
+            size_entropy: stats.size_entropy,
+            version_hist: stats.version_hist.clone(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_stats_summary(&title, &stats);
+    }
     Ok(())
 }
 
@@ -41,22 +111,44 @@ pub fn range_diff(
     a_hi: u32,
     b_lo: u32,
     b_hi: u32,
+    json: bool,
 ) -> anyhow::Result<()> {
     let stats_a = storage::aggregate_block_stats_in_range(conn, a_lo, a_hi)?;
     let stats_b = storage::aggregate_block_stats_in_range(conn, b_lo, b_hi)?;
-    println!(
-        "Range A [{}, {}): {} txs, size_entropy={:.4}",
-        a_lo, a_hi, stats_a.n_txs, stats_a.size_entropy
-    );
-    println!(
-        "Range B [{}, {}): {} txs, size_entropy={:.4}",
-        b_lo, b_hi, stats_b.n_txs, stats_b.size_entropy
-    );
-    println!(
-        "Diff: n_txs delta={}, size_entropy delta={:.4}",
-        stats_b.n_txs as i64 - stats_a.n_txs as i64,
-        stats_b.size_entropy - stats_a.size_entropy
-    );
+    let n_txs_delta = stats_b.n_txs as i64 - stats_a.n_txs as i64;
+    let size_entropy_delta = stats_b.size_entropy - stats_a.size_entropy;
+    if json {
+        let report = DiffReport {
+            range_a: RangeStats {
+                low: a_lo,
+                high: a_hi,
+                n_txs: stats_a.n_txs,
+                size_entropy: stats_a.size_entropy,
+            },
+            range_b: RangeStats {
+                low: b_lo,
+                high: b_hi,
+                n_txs: stats_b.n_txs,
+                size_entropy: stats_b.size_entropy,
+            },
+            n_txs_delta,
+            size_entropy_delta,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Range A [{}, {}): {} txs, size_entropy={:.4}",
+            a_lo, a_hi, stats_a.n_txs, stats_a.size_entropy
+        );
+        println!(
+            "Range B [{}, {}): {} txs, size_entropy={:.4}",
+            b_lo, b_hi, stats_b.n_txs, stats_b.size_entropy
+        );
+        println!(
+            "Diff: n_txs delta={}, size_entropy delta={:.4}",
+            n_txs_delta, size_entropy_delta
+        );
+    }
     Ok(())
 }
 

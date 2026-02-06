@@ -26,6 +26,9 @@ enum Command {
     },
     /// Produce reports from stored statistics.
     Report {
+        /// Output format: text (default) or json.
+        #[arg(long, default_value = "text")]
+        output: String,
         #[command(subcommand)]
         kind: ReportKind,
     },
@@ -75,15 +78,16 @@ async fn main() -> anyhow::Result<()> {
             let db = storage::open_db(&config.storage.db_path)?;
             collector::run_collect(&config, &db, low, high).await?;
         }
-        Command::Report { kind } => {
+        Command::Report { output, kind } => {
             let db = storage::open_db(&config.storage.db_path)?;
+            let json = output.eq_ignore_ascii_case("json");
             match kind {
-                ReportKind::Daily { days } => report::daily_summary(&db, days)?,
-                ReportKind::Weekly => report::weekly_summary(&db)?,
+                ReportKind::Daily { days } => report::daily_summary(&db, days, json)?,
+                ReportKind::Weekly => report::weekly_summary(&db, json)?,
                 ReportKind::Diff { range_a, range_b } => {
                     let (a_lo, a_hi) = parse_range(&range_a)?;
                     let (b_lo, b_hi) = parse_range(&range_b)?;
-                    report::range_diff(&db, a_lo, a_hi, b_lo, b_hi)?;
+                    report::range_diff(&db, a_lo, a_hi, b_lo, b_hi, json)?;
                 }
             }
         }
