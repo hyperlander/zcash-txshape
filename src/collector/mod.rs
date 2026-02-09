@@ -80,7 +80,7 @@ pub async fn run_collect(
     for start in (low..high).step_by(batch_size as usize) {
         let end = (start + batch_size).min(high);
         for height in start..end {
-            match fetch_block(&client, config, height).await {
+            match fetch_block_at_height(&client, config, height).await {
                 Ok(Some(shapes)) => {
                     for s in &shapes {
                         all_shapes.push(s.clone());
@@ -131,24 +131,75 @@ fn build_http_client(config: &Config) -> anyhow::Result<reqwest::Client> {
     Ok(builder.build()?)
 }
 
-async fn fetch_block(
+/// Try getblock by height first, then by hash (getblockhash + getblock) when height fails (e.g. 500 or null).
+async fn fetch_block_at_height(
     client: &reqwest::Client,
     config: &Config,
     height: u32,
+) -> anyhow::Result<Option<Vec<TxShape>>> {
+    let by_height = fetch_block_params(client, config, serde_json::json!([height, 2])).await;
+    match by_height {
+        Ok(Some(s)) => return Ok(Some(s)),
+        Ok(None) => {}
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("500") || msg.contains("501") || msg.contains("502") {
+                tracing::debug!(
+                    height,
+                    "getblock by height failed ({}), trying getblockhash fallback",
+                    msg
+                );
+            } else {
+                return Err(e);
+            }
+        }
+    }
+    let hash_body = serde_json::json!({
+        "jsonrpc": "1.0",
+        "id": "txshape",
+        "method": "getblockhash",
+        "params": [height]
+    });
+    let hash_resp = client
+        .post(&config.node.rpc_url)
+        .json(&hash_body)
+        .send()
+        .await?;
+    let hash_status = hash_resp.status();
+    let hash_bytes = hash_resp.bytes().await?;
+    if !hash_status.is_success() {
+        return Ok(None);
+    }
+    let hash_json: serde_json::Value = serde_json::from_slice(&hash_bytes).ok().unwrap_or_default();
+    let block_hash = match hash_json.get("result").and_then(|r| r.as_str()) {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+    fetch_block_params(client, config, serde_json::json!([block_hash, 2])).await
+}
+
+/// Call getblock with given params (e.g. [height, 2] or ["hash", 2]).
+async fn fetch_block_params(
+    client: &reqwest::Client,
+    config: &Config,
+    params: serde_json::Value,
 ) -> anyhow::Result<Option<Vec<TxShape>>> {
     let body = serde_json::json!({
         "jsonrpc": "1.0",
         "id": "txshape",
         "method": "getblock",
-        "params": [height, 2]
+        "params": params
     });
     let resp = client.post(&config.node.rpc_url).json(&body).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("RPC status {}", resp.status());
+    let status = resp.status();
+    let body_bytes = resp.bytes().await?;
+    if !status.is_success() {
+        let msg = String::from_utf8_lossy(&body_bytes);
+        anyhow::bail!("RPC status {}: {}", status, msg.trim());
     }
-    let json: serde_json::Value = resp.json().await?;
-    let block = match json.get("result") {
-        Some(r) => r,
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes)?;
+    let result_val = match json.get("result") {
+        Some(r) => r.clone(),
         None => {
             if json.get("error").is_some() {
                 return Ok(None);
@@ -156,7 +207,10 @@ async fn fetch_block(
             anyhow::bail!("no result in RPC response");
         }
     };
-    let block: BlockResponse = serde_json::from_value(block.clone())?;
+    if result_val.is_null() {
+        return Ok(None);
+    }
+    let block: BlockResponse = serde_json::from_value(result_val)?;
     let txs = match block.tx {
         Some(t) => t,
         None => return Ok(Some(Vec::new())),
