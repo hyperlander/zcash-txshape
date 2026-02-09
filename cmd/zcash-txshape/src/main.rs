@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
+use tracing::info;
 use zcash_txshape::collector;
 use zcash_txshape::config::Config;
 use zcash_txshape::report;
@@ -87,6 +88,17 @@ async fn main() -> anyhow::Result<()> {
                 ReportKind::Diff { range_a, range_b } => {
                     let (a_lo, a_hi) = parse_range(&range_a)?;
                     let (b_lo, b_hi) = parse_range(&range_b)?;
+                    // Auto-collect missing ranges so diff works without a prior collect.
+                    let blocks_a = storage::block_heights_in_range(&db, a_lo, a_hi)?;
+                    let blocks_b = storage::block_heights_in_range(&db, b_lo, b_hi)?;
+                    if blocks_a.is_empty() {
+                        info!(range = %range_a, "collecting range A (no block data in database)");
+                        collector::run_collect(&config, &db, a_lo, a_hi).await?;
+                    }
+                    if blocks_b.is_empty() {
+                        info!(range = %range_b, "collecting range B (no block data in database)");
+                        collector::run_collect(&config, &db, b_lo, b_hi).await?;
+                    }
                     report::range_diff(&db, a_lo, a_hi, b_lo, b_hi, json)?;
                 }
             }

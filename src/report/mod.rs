@@ -22,6 +22,8 @@ struct DiffReport {
     range_a: RangeStats,
     range_b: RangeStats,
     n_txs_delta: i64,
+    with_transparent_delta: i64,
+    with_shielded_delta: i64,
     size_entropy_delta: f64,
 }
 
@@ -30,6 +32,8 @@ struct RangeStats {
     low: u32,
     high: u32,
     n_txs: u64,
+    with_transparent: u64,
+    with_shielded: u64,
     size_entropy: f64,
 }
 
@@ -113,41 +117,74 @@ pub fn range_diff(
     b_hi: u32,
     json: bool,
 ) -> anyhow::Result<()> {
+    let blocks_a = storage::block_heights_in_range(conn, a_lo, a_hi)?;
+    let blocks_b = storage::block_heights_in_range(conn, b_lo, b_hi)?;
+    let has_data_a = !blocks_a.is_empty();
+    let has_data_b = !blocks_b.is_empty();
+
     let stats_a = storage::aggregate_block_stats_in_range(conn, a_lo, a_hi)?;
     let stats_b = storage::aggregate_block_stats_in_range(conn, b_lo, b_hi)?;
+
     let n_txs_delta = stats_b.n_txs as i64 - stats_a.n_txs as i64;
+    let with_transparent_delta = stats_b.with_transparent as i64 - stats_a.with_transparent as i64;
+    let with_shielded_delta = stats_b.with_shielded as i64 - stats_a.with_shielded as i64;
     let size_entropy_delta = stats_b.size_entropy - stats_a.size_entropy;
+
     if json {
         let report = DiffReport {
             range_a: RangeStats {
                 low: a_lo,
                 high: a_hi,
                 n_txs: stats_a.n_txs,
+                with_transparent: stats_a.with_transparent,
+                with_shielded: stats_a.with_shielded,
                 size_entropy: stats_a.size_entropy,
             },
             range_b: RangeStats {
                 low: b_lo,
                 high: b_hi,
                 n_txs: stats_b.n_txs,
+                with_transparent: stats_b.with_transparent,
+                with_shielded: stats_b.with_shielded,
                 size_entropy: stats_b.size_entropy,
             },
             n_txs_delta,
+            with_transparent_delta,
+            with_shielded_delta,
             size_entropy_delta,
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "Range A [{}, {}): {} txs, size_entropy={:.4}",
-            a_lo, a_hi, stats_a.n_txs, stats_a.size_entropy
-        );
-        println!(
-            "Range B [{}, {}): {} txs, size_entropy={:.4}",
-            b_lo, b_hi, stats_b.n_txs, stats_b.size_entropy
-        );
-        println!(
-            "Diff: n_txs delta={}, size_entropy delta={:.4}",
-            n_txs_delta, size_entropy_delta
-        );
+        if has_data_a {
+            println!(
+                "Range A [{}, {}): {} txs, with_transparent={}, with_shielded={}, size_entropy={:.4}",
+                a_lo, a_hi, stats_a.n_txs, stats_a.with_transparent, stats_a.with_shielded, stats_a.size_entropy
+            );
+        } else {
+            println!(
+                "Range A [{}, {}): no block data in database (run collect --range {}..{} first)",
+                a_lo, a_hi, a_lo, a_hi
+            );
+        }
+        if has_data_b {
+            println!(
+                "Range B [{}, {}): {} txs, with_transparent={}, with_shielded={}, size_entropy={:.4}",
+                b_lo, b_hi, stats_b.n_txs, stats_b.with_transparent, stats_b.with_shielded, stats_b.size_entropy
+            );
+        } else {
+            println!(
+                "Range B [{}, {}): no block data in database (run collect --range {}..{} first)",
+                b_lo, b_hi, b_lo, b_hi
+            );
+        }
+        if has_data_a || has_data_b {
+            println!(
+                "Diff: n_txs delta={}, with_transparent delta={}, with_shielded delta={}, size_entropy delta={:.4}",
+                n_txs_delta, with_transparent_delta, with_shielded_delta, size_entropy_delta
+            );
+        } else {
+            println!("Diff: no data to compare (collect block data for both ranges first).");
+        }
     }
     Ok(())
 }
